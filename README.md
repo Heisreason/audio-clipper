@@ -4,11 +4,26 @@ A small browser app for trimming MP3s: load a file, scrub to a spot, cut it with
 
 Everything is in one file, `index.html`. There's nothing to install and no build step, and it works offline.
 
-## Use it
+## Install (Linux)
 
-1. Download `index.html` (or clone this repo).
-2. Open it in a browser (Chromium, Firefox, etc.).
-3. Drag an MP3 onto the page, or click **Open file**.
+```bash
+git clone https://github.com/Heisreason/audio-clipper.git
+cd audio-clipper
+./install.sh
+```
+
+This adds **Audio Clipper** to your app menu. It opens in its own window using Chromium's app mode (no tabs or address bar). Everything stays on your machine.
+
+The script only writes inside your home folder:
+
+- `~/.local/share/audio-clipper/` holds the app files
+- `~/.local/share/applications/audio-clipper.desktop` is the menu entry
+
+To update, run `git pull && ./install.sh`. To remove it, run `./uninstall.sh`.
+
+Without installing, you can also just open `index.html` in any browser.
+
+Once it's open, drag an MP3 onto the window or click **Open file**. Exports go to your browser's download folder (usually `~/Downloads`).
 
 ## Shortcuts
 
