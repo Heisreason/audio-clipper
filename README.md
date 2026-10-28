@@ -41,9 +41,15 @@ Once it's open, drag an MP3 onto the window or click **Open file**. Exports go t
 | L | Loop the selection while playing |
 | Delete | Delete the selection |
 | Esc | Clear the selection |
+| [ / ] | Level down / up 1 dB (hold Shift for 3 dB) |
+| 0 | Reset level to original |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
 
 **Return on stop** (on by default) sends the playhead back to where you pressed play.
+
+## Levels
+
+The **Level** controls change how loud the audio is in the exported file (the Vol slider only changes playback). They apply to the selection, or to the whole file if nothing is selected, from -40 to +24 dB. Parts that would distort show in red on the waveform, and export warns you if any remain. Level changes ramp over 5 ms so the edges don't click.
 
 ## Export
 

@@ -97,6 +97,10 @@
   label.opt input[type=checkbox] { accent-color: var(--accent); }
   #volume { width: 110px; accent-color: var(--accent); }
   #volumeLabel { min-width: 38px; font-variant-numeric: tabular-nums; }
+  span.opt { color: var(--muted); font-size: 13px; }
+  #levelLabel { min-width: 58px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
+  #levelLabel.boosted { color: var(--playhead); }
+  #levelLabel.cut { color: var(--accent); }
 
   button, select {
     background: #2a2e37;
@@ -163,7 +167,7 @@
       <button id="zoomInBtn" disabled>Zoom +<kbd>+</kbd></button>
     </div>
 
-    <!-- Edit tools and export -->
+    <!-- Edit tools -->
     <div class="bar">
       <button id="splitBtn" disabled title="Cut at the playhead">Razor<kbd>S</kbd></button>
       <button id="markInBtn" disabled title="Mark the start of a section at the playhead">In<kbd>I</kbd></button>
@@ -174,6 +178,15 @@
       <span class="sep"></span>
       <button id="undoBtn" disabled>Undo<kbd>Ctrl+Z</kbd></button>
       <button id="redoBtn" disabled>Redo<kbd>Ctrl+Y</kbd></button>
+    </div>
+
+    <!-- Level (baked into the export) and export -->
+    <div class="bar">
+      <span class="opt" title="Changes the level in the exported file. Applies to the selection, or the whole file if nothing is selected.">Level</span>
+      <button id="levelDownBtn" disabled title="Quieter by 1 dB (Shift+[ for 3 dB)">−1 dB<kbd>[</kbd></button>
+      <span id="levelLabel" title="Level of the selection, or of the piece under the playhead">0.0 dB</span>
+      <button id="levelUpBtn" disabled title="Louder by 1 dB (Shift+] for 3 dB)">+1 dB<kbd>]</kbd></button>
+      <button id="levelResetBtn" disabled title="Back to the original level">Reset<kbd>0</kbd></button>
       <span class="spacer"></span>
       <label class="opt" title="Raise the volume so the loudest point sits just below the maximum">
         <input id="normalize" type="checkbox"> Normalize
@@ -580,6 +593,14 @@ function isJoin(i) {
   return a && b && Math.abs(a.end - b.start) > 1e-6;
 }
 
+// Each piece can carry its own level change in dB (`db`, default 0).
+function segDb(i) { const s = state.segments[i]; return (s && s.db) || 0; }
+function segGain(i) { return Math.pow(10, segDb(i) / 20); }
+// Touching pieces with different levels: ramp between them so it doesn't click.
+function isLevelStep(i) {
+  return state.segments[i + 1] && !isJoin(i) && segDb(i) !== segDb(i + 1);
+}
+
 function clampTime(t) { return Math.min(totalDuration(), Math.max(0, t)); }
 
 function formatTime(t) {
@@ -627,7 +648,8 @@ async function handleFile(file) {
     $('fileName').textContent = file.name;
     stage.classList.add('loaded');
     for (const id of ['playBtn', 'zoomInBtn', 'zoomOutBtn', 'openAgainBtn', 'splitBtn',
-                      'markInBtn', 'markOutBtn', 'loopBtn', 'exportBtn']) $(id).disabled = false;
+                      'markInBtn', 'markOutBtn', 'loopBtn', 'exportBtn',
+                      'levelDownBtn', 'levelUpBtn', 'levelResetBtn']) $(id).disabled = false;
     document.querySelectorAll('.skip').forEach(b => b.disabled = false);
     updateEditButtons();
     fitZoom();
@@ -715,12 +737,14 @@ function draw() {
   }
 
   // Waveform: for each screen pixel, find the matching stretch of the
-  // original audio and draw a line from its quietest to loudest point.
-  ctx2d.fillStyle = css.getPropertyValue('--wave');
+  // original audio and draw a line from its quietest to loudest point,
+  // scaled by that piece's level. Anything that would distort is red.
+  const waveColor = css.getPropertyValue('--wave'), clipColor = css.getPropertyValue('--danger');
   for (let x = 0; x < w; x++) {
     const t0 = (scroll + x) / state.pxPerSec;
     if (t0 >= dur) break;
     const t1 = Math.min(dur, (scroll + x + 1) / state.pxPerSec);
+    const gain = segGain(segmentAt(t0).index);
     const b0 = Math.floor(timelineToSource(t0) * sr / PEAK_BLOCK);
     const b1 = Math.max(b0 + 1, Math.ceil(timelineToSource(t1) * sr / PEAK_BLOCK));
     let lo = 1, hi = -1;
@@ -730,6 +754,9 @@ function draw() {
       if (max[b] > hi) hi = max[b];
     }
     if (hi < lo) continue;
+    hi *= gain; lo *= gain;
+    ctx2d.fillStyle = (hi > 1 || lo < -1) ? clipColor : waveColor;
+    hi = Math.min(1, hi); lo = Math.max(-1, lo);
     const y0 = mid - hi * mid * 0.95, y1 = mid - lo * mid * 0.95;
     ctx2d.fillRect(x, y0, 1, Math.max(1, y1 - y0));
   }
@@ -771,6 +798,28 @@ function draw() {
   }
 
   $('time').textContent = `${formatTime(state.playhead)} / ${formatTime(dur)}`;
+  updateLevelLabel();
+}
+
+// Show the level of the selection (or the piece under the playhead).
+function updateLevelLabel() {
+  let dbs;
+  if (hasRange()) {
+    dbs = new Set();
+    let acc = 0;
+    state.segments.forEach((s, i) => {
+      const t0 = acc, t1 = acc + segLen(i);
+      acc = t1;
+      if (t1 > state.sel.start + 1e-6 && t0 < state.sel.end - 1e-6) dbs.add(segDb(i));
+    });
+  } else {
+    dbs = new Set([segDb(segmentAt(state.playhead).index)]);
+  }
+  const el = $('levelLabel');
+  if (dbs.size !== 1) { el.textContent = 'mixed'; el.className = ''; return; }
+  const db = [...dbs][0];
+  el.textContent = (db > 0 ? '+' : '') + db.toFixed(1) + ' dB';
+  el.className = db > 0 ? 'boosted' : db < 0 ? 'cut' : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -801,13 +850,19 @@ function startPlayback() {
       const g = audioCtx.createGain();
       src.connect(g);
       g.connect(gainNode);
+      // This piece's level, plus the short fades/ramps at its edges.
+      const base = segGain(i);
+      g.gain.setValueAtTime(base, when);
       if (playLen > 4 * FADE) {
         if (i > 0 && isJoin(i - 1) && skip < FADE) {
           g.gain.setValueAtTime(0, when);
-          g.gain.linearRampToValueAtTime(1, when + FADE);
+          g.gain.linearRampToValueAtTime(base, when + FADE);
+        } else if (i > 0 && isLevelStep(i - 1) && skip < FADE) {
+          g.gain.setValueAtTime(segGain(i - 1), when);
+          g.gain.linearRampToValueAtTime(base, when + FADE);
         }
         if (isJoin(i)) {
-          g.gain.setValueAtTime(1, when + playLen - FADE);
+          g.gain.setValueAtTime(base, when + playLen - FADE);
           g.gain.linearRampToValueAtTime(0, when + playLen);
         }
       }
@@ -969,6 +1024,7 @@ function afterEdit(message) {
 function updateEditButtons() {
   const loaded = !!state.buffer;
   $('deleteBtn').disabled = !loaded || !hasRange();
+  if (loaded) updateLevelLabel();
   $('toSelBtn').disabled = !loaded || state.sel.start === null;
   $('undoBtn').disabled = state.undoStack.length === 0;
   $('redoBtn').disabled = state.redoStack.length === 0;
@@ -986,8 +1042,67 @@ function splitAtPlayhead() {
     return;
   }
   const next = cloneSegments();
-  next.splice(index, 1, { start: seg.start, end: cut }, { start: cut, end: seg.end });
+  next.splice(index, 1, { ...seg, end: cut }, { ...seg, start: cut });
   commit(next, `Cut at ${formatTime(state.playhead)}. Click a piece to select it, then press Delete.`);
+}
+
+// Return a copy of `list` with a boundary at timeline position t.
+function splitListAt(list, t) {
+  const out = [];
+  let acc = 0;
+  for (const seg of list) {
+    const len = seg.end - seg.start;
+    const cut = seg.start + (t - acc);
+    if (t - acc >= MIN_SEGMENT / 2 && acc + len - t >= MIN_SEGMENT / 2) {
+      out.push({ ...seg, end: cut }, { ...seg, start: cut });
+    } else {
+      out.push({ ...seg });
+    }
+    acc += len;
+  }
+  return out;
+}
+
+// Change the level of the selection, or of the whole file if nothing is
+// selected. `delta` adds dB; `reset` puts it back to the original level.
+const MIN_DB = -40, MAX_DB = 24;
+function changeLevel(delta, reset = false) {
+  if (!state.buffer) return;
+  const whole = !hasRange();
+  const a = whole ? 0 : state.sel.start;
+  const b = whole ? totalDuration() : state.sel.end;
+  const next = splitListAt(splitListAt(state.segments, a), b);
+  let acc = 0, changed = false;
+  for (const seg of next) {
+    const len = seg.end - seg.start;
+    const mid = acc + len / 2;
+    acc += len;
+    if (mid < a || mid > b) continue;
+    const before = seg.db || 0;
+    const after = reset ? 0 : Math.round(Math.min(MAX_DB, Math.max(MIN_DB, before + delta)) * 10) / 10;
+    if (after !== before) changed = true;
+    seg.db = after;
+  }
+  if (!changed) {
+    statusEl.textContent = reset ? 'Already at the original level.' : `Level limit reached (${MIN_DB} to +${MAX_DB} dB).`;
+    return;
+  }
+  // Drop the extra cuts this made where neighbours ended up identical again,
+  // but keep any razor cuts you made yourself.
+  const ownCuts = state.segments.map(s => s.end);
+  const isOwnCut = t => ownCuts.some(c => Math.abs(c - t) < 1e-9);
+  const merged = [];
+  for (const seg of next) {
+    const prev = merged[merged.length - 1];
+    if (prev && Math.abs(prev.end - seg.start) < 1e-9 && !isOwnCut(prev.end) &&
+        (prev.db || 0) === (seg.db || 0)) prev.end = seg.end;
+    else merged.push(seg);
+  }
+  const keepSel = whole ? null : { ...state.sel };
+  const what = whole ? 'Whole file' : 'Selection';
+  const how = reset ? 'reset to the original level' : `${delta > 0 ? 'louder' : 'quieter'} by ${Math.abs(delta)} dB`;
+  commit(merged, `${what} ${how}. Red in the waveform means it will distort.`);
+  if (keepSel) setSelection(keepSel.start, keepSel.end);
 }
 
 // Remove timeline stretch [a, b], trimming any pieces it overlaps.
@@ -1008,8 +1123,8 @@ function deleteSelection() {
     const t0 = acc, t1 = acc + len;
     acc = t1;
     if (t1 <= a || t0 >= b) { next.push({ ...seg }); continue; }  // untouched
-    if (t0 < a) next.push({ start: seg.start, end: seg.start + (a - t0) });  // keep the part before
-    if (t1 > b) next.push({ start: seg.start + (b - t0), end: seg.end });   // keep the part after
+    if (t0 < a) next.push({ ...seg, end: seg.start + (a - t0) });    // keep the part before
+    if (t1 > b) next.push({ ...seg, start: seg.start + (b - t0) });  // keep the part after
   }
   const cleaned = next.filter(s => s.end - s.start >= MIN_SEGMENT / 2);
   state.playhead = a;
@@ -1053,13 +1168,21 @@ function renderEdit() {
   let pos = 0;
   ranges.forEach(([s0, s1], i) => {
     const n = s1 - s0;
+    const base = segGain(i);
     const fadeIn = i > 0 && isJoin(i - 1) && n > 4 * fadeN;
+    const rampIn = i > 0 && isLevelStep(i - 1) && n > 4 * fadeN;
+    const prevGain = i > 0 ? segGain(i - 1) : base;
     const fadeOut = isJoin(i) && n > 4 * fadeN;
     for (let c = 0; c < nCh; c++) {
       const src = buf.getChannelData(c).subarray(s0, s1);
       const dst = out[c];
       dst.set(src, pos);
+      if (base !== 1) for (let k = 0; k < n; k++) dst[pos + k] *= base;
       if (fadeIn) for (let k = 0; k < fadeN; k++) dst[pos + k] *= k / fadeN;
+      if (rampIn) for (let k = 0; k < fadeN; k++) {
+        // Glide from the previous piece's level to this one's.
+        dst[pos + k] *= (prevGain + (base - prevGain) * k / fadeN) / base;
+      }
       if (fadeOut) for (let k = 0; k < fadeN; k++) dst[pos + n - 1 - k] *= k / fadeN;
     }
     pos += n;
@@ -1118,14 +1241,16 @@ async function exportMp3() {
 
   try {
     const { channels } = renderEdit();
+    let peak = 0;
+    for (const ch of channels) for (let i = 0; i < ch.length; i++) {
+      const a = Math.abs(ch[i]); if (a > peak) peak = a;
+    }
     let gain = 1;
     if ($('normalize').checked) {
-      let peak = 0;
-      for (const ch of channels) for (let i = 0; i < ch.length; i++) {
-        const a = Math.abs(ch[i]); if (a > peak) peak = a;
-      }
       gain = peak > 0 ? 0.891 / peak : 1; // 0.891 = -1 dB, leaves headroom for the MP3 encoder
     }
+    const clipNote = peak * gain > 1
+      ? ' Warning: some parts are too loud and will distort. Lower the level or tick Normalize.' : '';
     const [left, right] = toInt16(channels, gain);
     const kbps = Number($('bitrate').value);
     const blob = await new Promise((resolve, reject) => {
@@ -1151,7 +1276,7 @@ async function exportMp3() {
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
     const gainNote = gain !== 1 ? ` Normalized by ${(20 * Math.log10(gain)).toFixed(1)} dB.` : '';
-    statusEl.textContent = `Saved ${name} (${formatTime(totalDuration())}, ${(blob.size / 1048576).toFixed(1)} MB).${gainNote}`;
+    statusEl.textContent = `Saved ${name} (${formatTime(totalDuration())}, ${(blob.size / 1048576).toFixed(1)} MB).${gainNote}${clipNote}`;
     window.lastExport = blob; // handy for checking in the browser console
   } catch (err) {
     console.error(err);
@@ -1228,6 +1353,9 @@ $('deleteBtn').addEventListener('click', deleteSelection);
 $('undoBtn').addEventListener('click', undo);
 $('redoBtn').addEventListener('click', redo);
 $('exportBtn').addEventListener('click', exportMp3);
+$('levelDownBtn').addEventListener('click', e => changeLevel(e.shiftKey ? -3 : -1));
+$('levelUpBtn').addEventListener('click', e => changeLevel(e.shiftKey ? 3 : 1));
+$('levelResetBtn').addEventListener('click', () => changeLevel(0, true));
 $('zoomInBtn').addEventListener('click', () => setZoom(state.pxPerSec * 2, state.playhead));
 $('zoomOutBtn').addEventListener('click', () => setZoom(state.pxPerSec / 2, state.playhead));
 scroller.addEventListener('scroll', draw);
@@ -1254,6 +1382,9 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'Enter') { e.preventDefault(); goToSelection(); }
   else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); }
   else if (e.key === 'Escape') setSelection(null, null);
+  else if (e.code === 'BracketLeft') changeLevel(e.shiftKey ? -3 : -1);
+  else if (e.code === 'BracketRight') changeLevel(e.shiftKey ? 3 : 1);
+  else if (e.key === '0') changeLevel(0, true);
   else if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
   else if (e.key === '+' || e.key === '=') setZoom(state.pxPerSec * 2, state.playhead);
   else if (e.key === '-') setZoom(state.pxPerSec / 2, state.playhead);
